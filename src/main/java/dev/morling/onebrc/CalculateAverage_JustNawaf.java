@@ -1,21 +1,16 @@
 package dev.morling.onebrc;
-
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collector;
-import java.util.stream.Collectors;
+import java.io.RandomAccessFile;
 
 public class CalculateAverage_JustNawaf {
     private static final String FILE = "./measurements.txt";
+    private static final int THREAD_COUNT = Runtime.getRuntime().availableProcessors();
+
+
 
     private static record Measurement(String station, double value) {
         public Measurement(String [] parts){
-            this(parts[0], Double.parseDouble(parts[1]));
+            this(parts[0], 0.0);
         }
     }
 
@@ -38,42 +33,67 @@ public class CalculateAverage_JustNawaf {
     }
 
     public static void main(String[] args) throws IOException {
+        // TOOD: FOLLOW THESE:
+        // 1- Split the file into <Number of threads>.
+        // 2- Each thread read it's own file chunk.
+        // 3- Each Thread calculate it's own min,max,average.
+        // 4- Merge.
 
-        Collector<Measurement, MeasurementAggregator, ResultRow> collector = Collector.of(
-            MeasurementAggregator::new,
-          (a, m) -> {
-              a.min = Math.min(a.min, m.value);
-              a.max = Math.max(a.max, m.value);
-              a.sum += m.value;
-              a.count++;
-          },
+        RandomAccessFile file = new RandomAccessFile(FILE, "r");
 
-            (agg1, agg2) -> {
-                var a = new MeasurementAggregator();
-                a.max = Math.max(agg1.max, agg2.max);
-                a.min = Math.min(agg1.min, agg2.min);
-                a.count = agg1.count + agg2.count;
-                a.sum += agg1.sum;
+        long chunkSize = file.length() / THREAD_COUNT;
 
-                return a;
-            },
+        System.out.println("Chunk size: " + chunkSize);
 
-            (agg) -> {
-                return new ResultRow(agg.min, (Math.round(agg.sum * 10.0) / 10.0) / agg.count, agg.max);
-            }
-        );
+        for (int i = 0; i < THREAD_COUNT; i++) {
 
+            // TODO Find better way to get startPos and endPos
+            long startPos = i * chunkSize;
+            long endPos = startPos + chunkSize;
 
-        var startTime = System.currentTimeMillis();
-        Map<String, ResultRow> collect = new ConcurrentHashMap<>(
-                Files.lines(Path.of(FILE)).parallel()
-                        .map(record -> new Measurement(record.split(";")))
-                        .collect(Collectors.groupingByConcurrent(Measurement::station, collector))
-        );
+            System.out.println("Start: " + startPos);
+            System.out.println("End: " + endPos);
 
-        double time = Math.round(((System.currentTimeMillis() - startTime) / 1000.0) * 10.0) / 10.0;
+            file.seek(startPos);
 
-        System.out.println(collect);
-        System.out.print(STR."Total time taken: \{time} Second");
+            System.out.println("Response: " + file.readLine());
+        }
+
+//        Collector<Measurement, MeasurementAggregator, ResultRow> collector = Collector.of(
+//            MeasurementAggregator::new,
+//          (a, m) -> {
+//              a.min = Math.min(a.min, m.value);
+//              a.max = Math.max(a.max, m.value);
+//              a.sum += m.value;
+//              a.count++;
+//          },
+//
+//            (agg1, agg2) -> {
+//                var a = new MeasurementAggregator();
+//                a.max = Math.max(agg1.max, agg2.max);
+//                a.min = Math.min(agg1.min, agg2.min);
+//                a.count = agg1.count + agg2.count;
+//                a.sum = agg1.sum + agg2.sum;
+//
+//                return a;
+//            },
+//
+//            (agg) -> {
+//                return new ResultRow(agg.min, (Math.round(agg.sum * 10.0) / 10.0) / agg.count, agg.max);
+//            }
+//        );
+//
+//
+//        var startTime = System.currentTimeMillis();
+//        Map<String, ResultRow> collect = new TreeMap<>(
+//                Files.lines(Path.of(FILE)).parallel()
+//                        .map(record -> new Measurement("test", 15.0))
+//                        .collect(Collectors.groupingBy(Measurement::station, collector))
+//        );
+//
+//        double time = Math.round(((System.currentTimeMillis() - startTime) / 1000.0) * 10.0) / 10.0;
+//
+//        System.out.println(collect);
+//        System.out.print(STR."Total time taken: \{time} Second");
     }
 }
