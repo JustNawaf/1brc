@@ -1,54 +1,48 @@
 package dev.morling.onebrc;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.stream.Collector;
-import java.util.stream.Collectors;
 
 public class CalculateAverage_JustNawaf {
     private static final String FILE = "./measurements.txt";
-//    private static final int THREAD_COUNT = Runtime.getRuntime().availableProcessors();
-    private static final int THREAD_COUNT = 1;
+    private static final int THREAD_COUNT = Runtime.getRuntime().availableProcessors();
+//    private static final int THREAD_COUNT = 1;
+    private static Map<String, Integer> index = new HashMap<>();
+    private static ArrayList<Result> results = new ArrayList<>();
 
 
-    // TODO: CREATE A CLASS TO COLLECT MEASUREMENTS AND CALCULATING IT.
-    // TODO: REWRITE THE CODE.
-    // TODO: IDEA: SPLIT THE FILES INTO CHUNKS AND PROCESS THEM IN PARALLEL THEN MERGE IT.
-    
     private static record Measurement(String station, double value) {
         public Measurement(String [] parts){
-            this(parts[0], Double.parseDouble(parts[1]));
+            this(parts[0].trim(), Double.parseDouble(parts[1]));
         }
     }
 
-    private static record ResultRow(double min, double mean, double max) {
-
-        public String toString() {
-            return STR."\{round(min)}/\{round(mean)}/\{round(max)}";
-        }
-
-        private double round(double value) {
-            return Math.round(value * 10.0) / 10.0;
-        }
-    };
-
-    private static class MeasurementAggregator {
+    private static class Result {
+        private String station;
         private double min = Double.POSITIVE_INFINITY;
         private double max = Double.NEGATIVE_INFINITY;
-        private double sum;
-        private long count;
-    }
+        private double average = 0;
+        private double sum = 0;
+        private int count = 0;
 
+        public Result(String station) {
+            this.station = station;
+        }
+
+        public void addTemparture(double temp){
+            this.min = Math.min(this.min, temp);
+            this.max = Math.max(this.max, temp);
+            this.sum += temp;
+            this.count++;
+            this.average = Math.round((this.sum / this.count) * 10.0) / 10.0;
+        }
+
+        public String toString() {
+            return STR."\{station}=\{min}/\{average}/\{max}";
+        }
+    }
 
     private static long getEndPosition(long startPos, long chunkSize) throws IOException {
         long endPos = startPos + chunkSize;
@@ -69,20 +63,19 @@ public class CalculateAverage_JustNawaf {
         return endPos;
     }
 
-    private static String getX(RandomAccessFile file) throws IOException {
-        return file.readLine();
-    }
-
     private static ArrayList<MappedByteBuffer> getBuffers() throws IOException {
         ArrayList<MappedByteBuffer> buffers = new ArrayList<MappedByteBuffer>();
         RandomAccessFile file = new RandomAccessFile(FILE, "r");
-        long chunkSize = file.length() / THREAD_COUNT;
-        long startPos = 0;
         FileChannel channel = file.getChannel();
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
+        long chunkSize = channel.size() / (THREAD_COUNT);
+        long startPos = 0;
+
+        for (int i = 0; i < (THREAD_COUNT); i++) {
             long endPos = getEndPosition(startPos, chunkSize);
-            MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, startPos, (int) endPos - startPos);
+            long size = Math.min(endPos, channel.size()) - startPos;
+
+            MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, startPos, size);
             buffers.add(buffer);
             startPos = endPos;
         }
@@ -90,83 +83,49 @@ public class CalculateAverage_JustNawaf {
         return buffers;
     }
 
-    private static ArrayList<ResultRow> processMeasurements(ArrayList<MappedByteBuffer> buffers) throws InterruptedException, ExecutionException {
-        ArrayList<ResultRow> results = new ArrayList<>();
+    public static void main(String[] args) throws IOException {
+        ArrayList<MappedByteBuffer> buffers = getBuffers();
 
-        System.out.println(buffers);
+        // TODO: FINISH IN 29 SECONDS, NEEDS ENHANCEMENTS.
 
-        List<ArrayList<MeasurementAggregator>> l = buffers.stream().map(buffer -> {
-            System.out.println("Starting measurements");
-            System.out.println(buffer.hasRemaining());
+        long startTime = System.currentTimeMillis();
 
-            Map<String, Integer> index = new HashMap<>();
-            ArrayList<MeasurementAggregator> aggs = new ArrayList<>();
-
+        buffers.parallelStream().forEach(buffer -> {
             StringBuilder line = new StringBuilder();
 
             while (buffer.hasRemaining()) {
-                char c = (char) buffer.get();
+                try{
+                    char c = (char) buffer.get();
+                    if(c == '\n'){
+                        Measurement mgr = new Measurement(line.toString().split(";"));
 
-                if(c == '\n'){
-                    Measurement mgr = new Measurement(line.toString().split(";"));
+                        if(index.containsKey(mgr.station())){
+                            Result result = results.get(index.get(mgr.station()));
+                            result.addTemparture(mgr.value());
+                        } else {
+                            Result r = new Result(mgr.station());
+                            r.addTemparture(mgr.value());
+                            results.add(r);
+                            index.put(mgr.station(), results.size() - 1);
+                        }
 
-                    if(index.containsKey(mgr.station())){
-                        MeasurementAggregator agg = aggs.get(index.get(mgr.station));
-                        agg.min = Math.min(agg.min, mgr.value());
-                        agg.max = Math.max(agg.max, mgr.value());
-                        agg.count++;
-                        agg.sum += mgr.value();
-                    } else {
-                        MeasurementAggregator agg  = new MeasurementAggregator();
-                        agg.min = mgr.value();
-                        agg.max = mgr.value();
-                        agg.count++;
-                        agg.sum += mgr.value();
-                        aggs.add(agg);
-
-                        index.put(mgr.station(), aggs.indexOf(agg));
+                        line = new StringBuilder();
                     }
 
-                    line = new StringBuilder();
+                    line.append(c);
                 }
-
-                line.append(c);
+                 catch (Exception e){
+                    break;
+                 }
             }
+        });
 
-            System.out.println("Total measurements: " + aggs.size());
-            return aggs;
-        }).toList();
-
-//        for (ArrayList<MeasurementAggregator> aggs : l) {
-//            for(MeasurementAggregator agg : aggs){
-//                System.out.println(agg.max);
-//            }
-//        }
-        return results;
-    }
-
-    public static void main(String[] args) throws IOException {
-        var startTime = System.currentTimeMillis();
-
-        RandomAccessFile file = new RandomAccessFile(FILE, "r");
-
-        ArrayList<MappedByteBuffer> buffers = getBuffers();
-
-        try {
-            ArrayList<ResultRow> measurements = processMeasurements(buffers);
-
-//            Map<String, ResultRow> collect  = measurements.stream().collect(Collectors.groupingBy(Measurement::station, collector));
-
-//            System.out.println(collect);
-
-        } catch (InterruptedException | ExecutionException e) {
-            throw new RuntimeException(e);
+        long endTime = System.currentTimeMillis();
+        for (Result r : results) {
+            System.out.println(r);
         }
-//
-//
 
-        double time = Math.round(((System.currentTimeMillis() - startTime) / 1000.0) * 10.0) / 10.0;
-
-        System.out.print(STR."Total time taken: \{time} Second");
+        System.out.println((endTime - startTime) / 1000 + " seconds");
+        System.out.println("Total measurements: " + results.size());
     }
 }
